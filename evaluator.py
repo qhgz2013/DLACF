@@ -1,15 +1,14 @@
 import heapq
 import numpy as np
 import warnings
+import scipy.sparse as sp
 
 # change this if using K > 100
-
 denominator_table = np.log2(np.arange(2, 102))
 
 
 def deprecated(f):
     import functools
-    import warnings
     warning_calls = set()
 
     @functools.wraps(f)
@@ -20,6 +19,7 @@ def deprecated(f):
             warnings.simplefilter('default', DeprecationWarning)
             warning_calls.add(f)
         return f(*args, **kwargs)
+
     # noinspection PyDeprecation
     return wrap_func
 
@@ -431,20 +431,21 @@ class _MetricImpl(_MetricBase):
         def _dump_data(array: np.ndarray):
             nonlocal offset
             length = _compute_bytes_needed_ndarray(array)
-            buf[offset:offset+8] = struct.pack('L', length)
+            buf[offset:offset + 8] = struct.pack('L', length)
             offset += 8
-            buf[offset:offset+1] = struct.pack('B', array.ndim)
+            buf[offset:offset + 1] = struct.pack('B', array.ndim)
             offset += 1
-            buf[offset:offset+(8*array.ndim)] = struct.pack('L' * array.ndim, *array.shape)
+            buf[offset:offset + (8 * array.ndim)] = struct.pack('L' * array.ndim, *array.shape)
             offset += 8 * array.ndim
             dtype_str = bytes(array.dtype.name, 'utf8')
-            buf[offset:offset+1] = struct.pack('B', len(dtype_str))
+            buf[offset:offset + 1] = struct.pack('B', len(dtype_str))
             offset += 1
-            buf[offset:offset+len(dtype_str)] = dtype_str
+            buf[offset:offset + len(dtype_str)] = dtype_str
             offset += len(dtype_str)
-            np_arr = np.ndarray(array.shape, array.dtype, buffer=buf[offset:offset+array.nbytes])
+            np_arr = np.ndarray(array.shape, array.dtype, buffer=buf[offset:offset + array.nbytes])
             np_arr[:] = array[:]
             offset += array.nbytes
+
         # dump data
         buf[0:16] = struct.pack('LL', self.num_users, self.num_items)
         offset = 16
@@ -452,7 +453,7 @@ class _MetricImpl(_MetricBase):
             _dump_data(self.test_pos_items[u])
             _dump_data(self.test_pos_ratings[u])
             _dump_data(self.train_pos_items[u])
-        buf[offset:offset+16] = struct.pack('dd', self.maxR, self.minR)
+        buf[offset:offset + 16] = struct.pack('dd', self.maxR, self.minR)
         buf.release()
         mmap_file.close()
         file.close()
@@ -465,8 +466,12 @@ class Metric(_MetricImpl):
         train_pos_items = [R_train[u, :].indices for u in range(num_users)]
         test_pos_items = [R_test[u, :].indices for u in range(num_users)]
         test_pos_ratings = [R_test[u, test_pos_items[u]].toarray().flatten() for u in range(num_users)]
-        maxR = np.maximum(np.max(R_test.data), np.max(R_train.data))
-        minR = np.minimum(np.min(R_test.data), np.min(R_train.data))
+        if len(R_train.data) == 0:
+            maxR = np.max(R_test.data)
+            minR = np.min(R_test.data)
+        else:
+            maxR = np.maximum(np.max(R_test.data), np.max(R_train.data))
+            minR = np.minimum(np.min(R_test.data), np.min(R_train.data))
         super(Metric, self).__init__(num_users, num_items, train_pos_items, test_pos_items, test_pos_ratings, maxR,
                                      minR)
 
@@ -483,17 +488,17 @@ class MetricSM(_MetricImpl):
 
         def _restore_data():
             nonlocal offset
-            length = struct.unpack('L', buf[offset:offset+8])[0]
-            ndim = struct.unpack('B', buf[offset+8:offset+9])[0]
+            length = struct.unpack('L', buf[offset:offset + 8])[0]
+            ndim = struct.unpack('B', buf[offset + 8:offset + 9])[0]
             tmp_offset = 9
-            shape = struct.unpack('L' * ndim, buf[offset+tmp_offset:offset+tmp_offset+(8 * ndim)])
+            shape = struct.unpack('L' * ndim, buf[offset + tmp_offset:offset + tmp_offset + (8 * ndim)])
             tmp_offset += 8 * ndim
-            dtype_len = struct.unpack('B', buf[offset+tmp_offset:offset+tmp_offset+1])[0]
+            dtype_len = struct.unpack('B', buf[offset + tmp_offset:offset + tmp_offset + 1])[0]
             tmp_offset += 1
-            dtype_str = str(bytes(buf[offset+tmp_offset:offset+tmp_offset+dtype_len]), 'utf8')
+            dtype_str = str(bytes(buf[offset + tmp_offset:offset + tmp_offset + dtype_len]), 'utf8')
             tmp_offset += dtype_len
             nbytes = length - tmp_offset
-            arr = np.ndarray(shape, np.dtype(dtype_str), buf[offset+tmp_offset:offset+tmp_offset+nbytes])
+            arr = np.ndarray(shape, np.dtype(dtype_str), buf[offset + tmp_offset:offset + tmp_offset + nbytes])
             offset += length
             return arr
 
@@ -505,7 +510,7 @@ class MetricSM(_MetricImpl):
             test_pos_items.append(_restore_data())
             test_pos_ratings.append(_restore_data())
             train_pos_items.append(_restore_data())
-        max_r, min_r = struct.unpack('dd', buf[offset:offset+16])
+        max_r, min_r = struct.unpack('dd', buf[offset:offset + 16])
         super(MetricSM, self).__init__(num_users, num_items, train_pos_items, test_pos_items, test_pos_ratings,
                                        max_r, min_r)
         self.memoryview_buffer = buf
